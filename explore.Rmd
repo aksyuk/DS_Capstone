@@ -1,0 +1,183 @@
+---
+title: "Data Science Capstone: Exploratory Data Analysis"
+author: "S.A.Aksyuk"
+date: '27 Nov 2017'
+output: html_document
+---
+
+```{r setup, include = FALSE}
+
+# en: load packages
+# ru: загрузка библиотек
+library('knitr')
+library('stringr')
+library('tm')
+# library('RWeka')
+library('slam')
+library('ggplot2')
+library('wordcloud')
+library('SnowballC')
+
+# en: report options
+# ru: опции отображения отчёта
+knitr::opts_chunk$set(echo = TRUE)
+
+options(mc.cores = 2)
+
+train.part <- 0.05
+
+```
+
+## Summary
+
+The report contains an exploratory analysis of text data for the Coursera Data Science Capstone Project. Source data includes texts from three sourses: twitter, blogs and news. There are four availiable laguages: English, Finnish, English and German. This analysis will focus on English data sources. The goal of the project is to build an application based on a predictive text model, which is capable to predict next word for given phrase. Data for training predictive model was provided by [Swiftkey](https://swiftkey.com/).   
+
+## Load Data
+
+First step is to load data file ["Coursera-SwiftKey.zip"](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip) from the Internet.   
+
+```{r load-data}
+# en: data URL
+# ru: URL исходных данных
+url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+# en: download data file
+# ru: загружаем файл данных
+if (!dir.exists('data')) {
+    dir.create('data')
+}
+if (!file.exists('./data/Coursera-SwiftKey.zip')) { 
+    download.file(url, 
+                  destfile = "./data/Coursera-SwiftKey.zip") 
+}
+
+# en: unzip data file
+# ru: распаковываем архив
+if (!dir.exists('./data/final')) {
+    unzip('./data/Coursera-SwiftKey.zip', exdir = './data')
+}
+
+```
+
+Data sources are organised by languages:  
+
+```{r data-dirs}
+# en: data directories list
+# ru: список директорий данных
+dir('./data/final')
+```
+
+Let's read twitter, blogs and news texst in English and count lines.   
+
+```{r read-txt, warning = F, message = F, cache = T}
+
+# en: read English texts
+# ru: читаем русские тексты
+file.tw.en <- file('./data/final/en_US/en_US.twitter.txt', 'r') 
+txt.tw.en <- readLines(file.tw.en, encoding = 'UTF-8', skipNul = TRUE)
+close(file.tw.en)
+
+file.bl.en <- file('./data/final/en_US/en_US.blogs.txt', 'r') 
+txt.bl.en <- readLines(file.bl.en, encoding = 'UTF-8', skipNul = TRUE)
+close(file.bl.en)
+
+file.nw.en <- file('./data/final/en_US/en_US.news.txt', 'r') 
+txt.nw.en <- readLines(file.nw.en, encoding = 'UTF-8', skipNul = TRUE)
+close(file.nw.en)
+
+ls.txt.en <- list(txt.tw.en, txt.bl.en, txt.nw.en)
+names(ls.txt.en) <- c('txt.tw.en', 'txt.bl.en', 'txt.nw.en')
+rm(txt.tw.en, txt.bl.en, txt.nw.en)
+
+```
+
+```{r file-size-table, echo = F, results = 'asis', cache = T}
+df.summary <- 
+    data.frame(`Text source` = c('Twitter', 'Blogs', 'News'),
+               `Length of English files` = sapply(ls.txt.en, length),
+               `File size, Mb: en` = round(
+                   c(file.info('./data/final/en_US/en_US.twitter.txt')$size,
+                     file.info('./data/final/en_US/en_US.blogs.txt')$size,
+                     file.info('./data/final/en_US/en_US.news.txt')$size) / (1024 ^ 2),
+                   1))
+kable(df.summary, row.names = F, col.names = c('Text source',
+                                               'Length of English files',
+                                               'File size, Mb'))
+
+```
+
+An application we are going to create will not see the difference in source of phrase to finish. So, we are going to ignore information about text origin and concatenate twitter, blogs and news texts.   
+
+Data files are rather large, so we will use `r train.part * 100`% of lines as training sample. Also, we need to clean our data:   
+
+ * exclude from texts punctuation symbols;     
+ * exclude numbers;    
+ * exclude stopwords;    
+ * recode characters to lowcase.     
+
+```{r train-set, cache = T}
+
+# en: select training set
+# ru: отбираем обучающую выборку
+for (i in 1:3) {
+    n <- length(ls.txt.en[[i]])
+    set.seed(271117)
+    inTrain <- sample(1:n, size = train.part * n)
+    ls.txt.en[[i]] <- ls.txt.en[[i]][inTrain]
+}
+
+```
+
+```{r make-and-clean-corpus, cache = T}
+
+# en: corpus for English texts
+# ru: корпус из английских текстов
+txt <- c(ls.txt.en[[1]], ls.txt.en[[2]], ls.txt.en[[3]])
+en.corp <- VCorpus(VectorSource(txt))
+
+# en: clean text data
+# ru: чистим текстовые данные
+en.corp <- tm_map(en.corp, 
+                  content_transformer(function(x) iconv(enc2utf8(x), 
+                                                        sub = 'byte')))
+en.corp <- tm_map(en.corp, removePunctuation)
+en.corp <- tm_map(en.corp, removeNumbers)
+en.corp <- tm_map(en.corp, content_transformer(tolower))
+
+my.stopwords.en <- c(stopwords('English'))
+
+en.corp <- tm_map(en.corp, removeWords, my.stopwords.en)
+
+```
+
+```{r document-term-matrix, cache = T, echo = F}
+
+# en.corp <- tm_map(en.corp, stemDocument)
+
+# en: document terms matrix
+# ru: матрица частот
+dtm <- DocumentTermMatrix(en.corp)
+dtm <- removeSparseTerms(dtm, 0.999)
+freq <- sort(colSums(as.matrix(dtm)), decreasing = TRUE)
+
+```
+
+## Data Visualisation
+
+Word cloud shows words in corpus in proportion to their frequency.    
+
+```{r word-cloud}
+
+wordcloud(names(freq), freq, max.words = 50, random.order = F)
+
+head(freq)
+
+```
+
+
+## What next   
+
+The predictive text model will be based on frequencies of occurrence of n-grams. According to [Wikipedia](https://en.wikipedia.org/wiki/N-gram), "an n-gram is a contiguous sequence of n items from a given sequence of text or speech". In order to create a model we need to accomplish a number of steps, using our corpus:     
+ * build n-grams frequency matrices;  
+ * find associations between words and n-grams, using the frequency matrices.  
+
